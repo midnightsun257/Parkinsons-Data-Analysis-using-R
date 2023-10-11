@@ -1,0 +1,206 @@
+---
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## QUESTION 3
+Question 3 tests if the age ranges (36,45.8], (45.8,55.6], (55.6,65.4], (65.4,75.2], (75.2,85] have the same total_UPDRS scores for any NHR, DFA, and HNR values.
+
+Modify Data: First, we will modify the data, since there were repetitive measurements for every patient in the study to avoid multicollinearity issues. Then we define the variables we and make it ready to be put in the model.
+
+``` {r}
+library(dplyr)
+library(car)
+library(fmsb)
+library(ALSM)
+library(onewaytests)
+library(MASS)
+library(readxl)
+library(fmsb)
+library(boot)
+library(leaps)
+library(caret)
+#import data
+data = read.csv('C:/Users/Ankita Mishra/Desktop/parkinsons_data.csv')
+data_group = data
+data_group$test_time = as.integer(data_group$test_time)
+data_group <- data_group %>%
+  group_by(subject.,age,sex,test_time) %>%
+  dplyr::summarise_all('mean') %>%
+  as.data.frame()
+data = data_group
+
+# define variables
+y = data$total_UPDRS
+ageCut=cut(data$age,5)
+temp= factor(ageCut, levels=c('(36,45.8]','(45.8,55.6]','(55.6,65.4]', '(65.4,75.2]', '(75.2,85]'), labels=c(0,1,2,3,4))
+temp= as.integer(as.character(temp))
+x2 = temp
+x8= data$HNR
+x9 = data$NHR
+x10= data$DFA
+```
+
+
+Multicollinearity issues: This is our first glimpse at the data. Raw scatterplots indicate weak correlations of each variable with Y. The correlation between X8, X9 is -0.7140129 so VIF needs to be checked to determine if this is an issue. Since this is far less than 10, we can proceed with reasonable assurance.
+``` {r}
+#correlation between the variables
+df= data.frame(x2, x9, x10, x8)
+pairs(df)
+cor(df)
+
+VIF(lm(x9~x10+x8+as.factor(x2)))
+VIF(lm(x10~x9+x8+as.factor(x2)))
+VIF(lm(x8~x10+x9+as.factor(x2)))
+VIF(lm(x9~x8))
+
+```
+
+The full model includes all the variables and the interaction terms. Running a Shapiro test and Brown-Forsythe test on the data tells us the data is non-normal and doesn't have constant variance as interpreted by the p-value.
+``` {r}
+#full model
+full = lm(y~x9+x10+x8+as.factor(x2)+as.factor(x2)*x9+as.factor(x2)*x10+as.factor(x2)*x8, data)
+
+res= resid(full)
+shapiro.test(res)
+
+library(onewaytests)
+data$gr = cut(y, 5)
+data$residual = full$residuals
+bf.test(residual~gr, data)
+```
+
+Checking for influential points and outliers using DFFITS, DFBETAS, and Cook’s Distance. Row 685 seems to be a huge influential problem so we will remove it.
+```{r}
+p=20
+n= length(y)
+pt2= qf(0.2,p,n-p)
+pt5= qf(0.5,p,n-p)
+s=0
+for (i in 1:n) {
+  val= pf(cooks.distance(full)[i],p,n-p)
+  if (val<pt2) {
+    s=s+1
+  }
+}
+print(s)
+```
+```{r}
+s=0
+for (i in 1:n) {
+  val= pf(cooks.distance(full)[i],p,n-p)
+  if (val>pt5) {
+    s=s+1
+  }
+}
+print(s)
+```
+``` {r}
+sum(abs(dffits(full))>1)
+for (i in 1:n) {
+  if (abs(dffits(full)[i])>1) {
+    print(abs(dffits(full)[i]))
+  }
+}
+```
+``` {r}
+for (i in 1:p) {
+  print(sum(abs(dfbetas(full)[,i])>1))
+}
+```
+
+``` {r remove influential}
+outlier= c(685)
+outliers_gone <- data_group[-outlier, ]
+y = outliers_gone$total_UPDRS
+ageCut=cut(outliers_gone$age,5)
+temp= factor(ageCut, levels=c('(36,45.8]','(45.8,55.6]','(55.6,65.4]', '(65.4,75.2]', '(75.2,85]'), labels=c(0,1,2,3,4))
+temp= as.integer(as.character(temp))
+x2 = temp
+x8= outliers_gone$HNR
+x9 = outliers_gone$NHR
+x10= outliers_gone$DFA
+
+full = lm(y~x9+x10+x8+as.factor(x2)+as.factor(x2)*x9+as.factor(x2)*x10+as.factor(x2)*x8, data)
+anova(full)
+Anova(full, type="II")
+m= summary(full)
+m
+```
+``` {r}
+res= resid(full)
+shapiro.test(res)
+bf.test(residual~gr, data)
+```
+
+It seems our model is non-normal and doesn't have constant variance, so we need to transform Y.
+``` {r Y transform}
+bcmle= boxcox(full, lambda=seq(-3,3,by=0.1))
+lambda= bcmle$x[which.max(bcmle$y)]
+lambda
+yNew= (y)**lambda
+modY= lm(yNew~x9+x10+x8+as.factor(x2)+as.factor(x2)*x9+as.factor(x2)*x10+as.factor(x2)*x8)
+res= resid(modY)
+shapiro.test(res)
+gr = cut(yNew,5)
+residual= modY$residuals
+bf.test(residual~gr,data)
+```
+
+Weighted Least Squares: As a last attempt to improve the heteroscedacity, we applied weighted least squares regression. This did not improve the result on the BF test, so WLS was abandoned.
+Multiple iterations of WLS only worsened the results.
+
+``` {r}
+wts1= 1/fitted(lm(abs(residuals(modY))~x9+x10+x8+as.factor(x2)+as.factor(x2)*x9+as.factor(x2)*x10+as.factor(x2)*x8))**2
+mod1= lm(yNew~x9+x10+x8+as.factor(x2)+as.factor(x2)*x9+as.factor(x2)*x10+as.factor(x2)*x8, weighr=wts1, data=data)
+
+res= resid(mod1)
+shapiro.test(res)
+gr = cut(yNew,5)
+residual= mod1$residuals
+bf.test(residual~gr,data)
+```
+
+``` {r}
+plot(fitted(modY), residuals(modY))
+abline(0,0)
+
+res= resid(modY)
+qqnorm(res)
+qqline(res)
+```
+
+For a more confidence answer, we perform bootstrap analysis. Bootstrapping produces around the same results as our model for transformed Y though for x9, and x9 vs. all the age groups the standard errors bootstrapping produces are half of what the lm() function produces.
+``` {r}
+boot.reg <- function(data, indices, maxit=1000) {
+  data <- data[indices,]
+  data.mod <- lm(yNew~x9+x10+x8+as.factor(x2)+as.factor(x2)*x9+as.factor(x2)*x10+as.factor(x2)*x8, data=data)
+  coef(data.mod)
+}
+data_model_reg <- boot(data=data, statistic= boot.reg, R=1000, maxit=100)
+data_model_reg
+summary(modY)
+```
+``` {r training}
+set.seed(123)
+train.control= trainControl(method='cv', number=10)
+step.model= train(yNew~ x9 + x10 + x8 + as.factor(x2) + as.factor(x2) *x9 + as.factor(x2) * x10 + as.factor(x2) * x8, data= data, method= 'leapBackward', tuneGrid=data.frame(nvmax=5),trControl=train.control)
+step.model$results
+```
+
+Since we have now decided on the transformed Y model, we will now perform our hypothesis
+testing:
+``` {r hypothesis testing}
+red= lm(yNew~ x9+x10+x8, data=data)
+full= lm(yNew~x9+x10+x8+as.factor(x2)+as.factor(x2)*x9+as.factor(x2)*x10+as.factor(x2)*x8, data=data)
+anova(red,full)
+```
+```{r}
+qf(0.95,16,969)
+```
+
+Since F_s = 22.12 > 𝐹(0.95,16,969) = 1.653953, we reject H0, and conclude that the age ranges (36,45.8], (45.8,55.6], (55.6,65.4], (65.4,75.2], (75.2,85] produce different total_UPDRS scores for any NHR, DFA, and HNR values.
