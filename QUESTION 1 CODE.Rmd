@@ -1,0 +1,333 @@
+---
+title: "Statistical Analysis using R"
+output:
+  word_document: default
+  pdf_document: default
+date: '2023-09-03'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## QUESTION 1
+Question 1 tests whether measures of vocal entropy (PPE and RPDE) significantly impact a
+subject’s UPDRS score - a measure of Parkinson’s disease - even when taking subject age and the effects of
+passing time into account.
+
+Load libraries and import data:
+```{r load libraries}
+library(dplyr)
+library(car)
+library(fmsb)
+library(ALSM)
+library(onewaytests)
+library(MASS)
+library(readxl)
+library(fmsb)
+library(boot)
+library(leaps)
+library(caret)
+
+#import data
+data = read.csv('C:/Users/Ankita Mishra/Desktop/parkinsons_data.csv')
+```
+
+Modify Data: Each subject was tested several times on a single day. To create a variable that accurately
+assesses the effect of passing time, we average the results that occur on the same day. We also turn the
+subject age into a categorical variable with 5 groups.
+
+``` {r }
+#Average the test times into days for each subject
+data_group = data
+data_group$test_time = as.integer(data_group$test_time)
+data_group <- data_group %>%
+  group_by(subject.,age,sex,test_time) %>%
+  dplyr::summarise_all('mean') %>%
+  as.data.frame()
+
+# Group Age into a categorical variable
+ageCut = cut(data_group$age, breaks=c(1,60,65,70,75,100))
+ageCategory = factor(ageCut, levels=c('(1,60]','(60,65]','(65,70]','(70,75]','(75,100]'), labels=c(0,1,2,3,4))
+ageCategory = as.integer(as.character(ageCategory))
+```
+
+Assign variables and visualize: This is our first glimpse at the data. Raw scatterplots indicate weak correlations
+of each variable with Y. The measures of vocal entropy (X3-PPE and X4-RPDE) are unsurprisingly trending together. Multicollinearity issues are addressed formally later. We also see potential influential
+points here.
+
+``` {r initial analysis of collinearity}
+y = data_group$total_UPDRS # Response variable, UPDRS diagnostic score, continuous
+x1 = data_group$test_time # Predictor variable, day of data collection, integers
+x2 = ageCategory # Predictor variable, age group of subject, categorical
+x3 = data_group$PPE # Predictor variable, pitch period entropy, continuous
+x4 = data_group$RPDE # Predictor variable, recurrence period density entropy, continuous
+# Create scatterplot matrix
+frame = data.frame(x1, x2, x3, x4, y)
+
+pairs(frame[,1:5], pch=19)
+```
+Initial MLR Creation: Insights from the initial MLR models show that all predictors contribute significant
+- if small - influence on UPDRS score. Examining X3-PPE, we find its sum of squares contribution largely
+varies between the Type I and Type II ANOVA tables, indicating potential multicollinearity issues. We also
+see that the coefficient of determination for this model will likely be around 20%.
+``` {r mlr creation}
+model = lm(y~x1+x2+x3+x4)
+anova(model)
+
+Anova(model, type="II")
+m= summary(model)
+m
+
+b0 = m$coefficients[1,1] # Intercept
+b1 = m$coefficients[2,1] # Impact of passing time
+b2 = m$coefficients[3,1] # Impact of subject age
+b3 = m$coefficients[4,1] # Impact of PPE
+b4 = m$coefficients[5,1] # Impact of RPDE
+yhat = b0 + b1*x1 + b2*x2 + b3*x3 + b4*x4
+res = residuals(model)
+n = length(y)
+```
+
+Diagnostics - Multicollinearity: Here we formally test for multicollinearity with the variance inflation factor.
+The full model has a VIF of 1.004, which does not come near our threshold of 10. However, because we
+suspect X3 and X4, we experiment with other models and find that the VIF between them is only 1.664.
+Since this is far less than 10, we can proceed with reasonable assurance. Ridge regression is not necessary.
+We also tried including the interaction X3*X4, but this worsened the Rˆ2 of the model.
+``` {r multicollinearity test}
+# Empirically test for multicollinearity. Problems if VIF > 10.
+VIF(lm(x1~x2+x3+x4))
+VIF(lm(x2~x1+x3+x4))
+VIF(lm(x3~x2+x1+x4))
+VIF(lm(x4~x2+x3+x1))
+VIF(lm(x3~x4))
+summary(lm(y~x3))
+summary(lm(y~x4))
+summary(lm(y~x3+x4))
+```
+Diagnostics - Outliers / Influential Points: Using the criteria for DFFITS, DFBETAS, and Cook’s Distance, no influential points were identified. Inspecting the diagonals of the Hat matrix revealed several X-outliers.
+These are removed from the model in the next step, and all diagnosis is performed with the new data. VIF analysis was re-run without the outliers, and the results barely changed at all. The residual plots do not reveal any obvious non-constant variance.
+
+```{r influential points}
+print("Searching for points influencing the model fit...")
+for (p in dffits(model)) {
+  if (p>1) {
+    print(p)
+  }
+}
+print("Searching for points influencing the impact parameters...")
+
+for (p in dfbetas(model)) {
+  if (p>1) {
+    print(p)
+  }
+}
+print("Searching for Cook's Distance influential points...")
+
+CD = cooks.distance(model)
+print(cat("Maximum Cook's Distance = ", max(CD)))
+
+minor = qf(0.2, 5, n-5)
+moderate = qf(0.5, 5, n-5)
+print("Searching for X-Outliers using the Hat matrix")
+print("Significance threshold is")
+3*(5/n) #Using a significance threshold of 3*(p/n) instead of 2*(p/n) to be extra conservative with retaining
+
+hat = lm.influence(model)$hat # Computing the Hat matrix
+for (p in hat) {
+  if (abs(p)>(3*(5/n))) {
+    print(which(hat == p))
+  }
+}
+# Residual Inspection
+plot(yhat, res, main = "MLR Residuals v. Fitted Values")
+plot(x1, res, main = "MLR Residuals v. X1 - Test Time")
+plot(x2, res, main = "MLR Residuals v. X2 - Age Group")
+plot(x3, res, main = "MLR Residuals v. X3 - PPE")
+plot(x4, res, main = "MLR Residuals v. X4 - RPDE")
+```
+
+Remake Model without Outliers: Following the exact same steps as Initial Model Creation, but data without
+outliers are stored in dataframe “outliers_gone”. Interestingly, removing the outliers causes the added value
+of X3 to become insignificant.
+``` {r model without outliers}
+# Remake Model without Outliers:
+outliers = c(685, 819, 833, 840, 842, 844) # Indicies of outliers, discovered in previous step
+outliers_gone <- data_group[-outliers, ]
+y = outliers_gone$total_UPDRS
+x1 = outliers_gone$test_time
+ageCut = cut(outliers_gone$age, breaks=c(1,60,65,70,75,100))
+ageCategory = factor(ageCut, levels=c('(1,60]','(60,65]','(65,70]','(70,75]','(75,100]'), labels=c(0,1,2,3,4))
+ageCategory = as.integer(as.character(ageCategory))
+x2 = ageCategory
+x3 = outliers_gone$PPE
+x4 = outliers_gone$RPDE
+model = lm(y~x1+x2+x3+x4)
+anova(model)
+Anova(model, type="II")
+m= summary(model)
+m
+
+b0 = m$coefficients[1,1]
+b1 = m$coefficients[2,1]
+b2 = m$coefficients[3,1]
+b3 = m$coefficients[4,1]
+b4 = m$coefficients[5,1]
+yhat = b0 + b1*x1 + b2*x2 + b3*x3 + b4*x4
+res = residuals(model)
+n = length(y)
+```
+
+Diagnostics - Heteroscedacity and Non-normality: Heteroscedacity is tested with the Brown-Forsythe test,
+with 3 equal sections. Non-normality is tested with the Shapiro test. The model failed both test, but the
+most drastic failure was with non-normality, as easily viewed from the Q-Q plot. The BF result is seemingly
+in conflict with the residual plots, which are not obviously hereoscedastic. However, from these results we
+decided to apply remediation to correct the assumption violations.
+``` {r heteroscedacity and non normality }
+#Diagnostics 
+# Brown-Forsythe Test
+g<-rep(1,n)
+g[y<=(max(y)/3)]=0 # Divide Y data into 3 equal sections
+g[y>=(2*(max(y)/3))]=2
+bftest(model, g, alpha=0.05)
+# Shapiro Test
+shapiro.test(res)
+qqnorm(res)
+qqline(res)
+```
+
+Remediation - Y Transformation: The Box Cox method was used to find an appropriate lambda for transforming Y. The boxcox R function was not working, so this was performed manually by trial and error until a lambda was selected that minimized the non-normality. As a result of the transformation, the p-value on the Shapiro test improved by 6 orders of magnitude. At the same time, the p-value on the BF test drastically worsened. However, the fitted value residual plot still looks fine, so we proceed with this transformation having improved the normality of the data.
+``` {r transformation}
+# Remediation: Y Transformation
+Y = y**0.42 # Transforming UPDRS score with lambda = 0.42
+model_t = lm(Y~x1+x2+x3+x4) # Model creation with transformed data
+# Brown-Forsythe Test
+g<-rep(1,n)
+g[Y<=(max(Y)/3)]=0 # Divide Y data into 3 equal sections
+g[Y>=(2*(max(Y)/3))]=2
+bftest(model_t, g, alpha=0.05)
+# Shapiro Test
+res_t = residuals(model_t)
+shapiro.test(res_t)
+qqnorm(res_t)
+qqline(res_t)
+
+# Plot new residuals
+m_t = summary(model_t)
+m_t
+
+b0t = m_t$coefficients[1,1]
+b1t = m_t$coefficients[2,1]
+b2t = m_t$coefficients[3,1]
+b3t = m_t$coefficients[4,1]
+b4t = m_t$coefficients[5,1]
+Yhat = b0t + b1t*x1 + b2t*x2 + b3t*x3 + b4t*x4
+plot(Yhat, res_t, main = "MLR Residuals v. Fitted Values")
+```
+Remediation - Weighted Least Squares: As a last attempt to improve the heteroscedacity, we applied weighted least squares regression. This did not improve the result on the BF test, so WLS was abandoned.
+Multiple iterations of WLS only worsened the results.
+
+``` {r wls}
+# Building models with weighted residuals
+wts1=1/fitted(lm(abs(res_t)~x1+x2+x3+x4,data=data))**2
+model_w1 = lm(Y~x1+x2+x3+x4, weight = wts1, data) # Model with 1 iteration of WLS
+summary(model_w1)
+
+# Brown-Forsythe Test
+g<-rep(1,n)
+g[Y<=(max(Y)/3)]=0 # Divide Y data into 3 equal sections
+g[Y>=(2*(max(Y)/3))]=2
+bftest(model_w1, g, alpha=0.05)
+# Shapiro Test
+res_wt = residuals(model_w1)
+shapiro.test(res_wt)
+qqnorm(res_wt)
+qqline(res_wt)
+
+m_w = summary(model_w1)
+b0wt = m_w$coefficients[1,1]
+b1wt = m_w$coefficients[2,1]
+b2wt = m_w$coefficients[3,1]
+b3wt = m_w$coefficients[4,1]
+Yhat_w = b0wt + b1wt*x1 + b2wt*x2 + b3wt*x4
+#res_weighted = residuals(model_w2)
+#res_weighted2 = residuals(model_w3)
+plot(Yhat_w, res_wt, main = "Residuals v. Fitted Values (Transformed+WLS)")
+```
+Partial Regression: The research questions asks about the effects of vocal entropy on UPDRS score even when subject age and time are accounted for in the model. This calls for a comparison of the partial regression coefficients of X3 and X4, given X1 and X2. Here, we create and view the partial regression plots which do show a slight upward trend for both X3 and X4. We also perform an ANOVA F-test comparing a reduced model to the full model containing the partial impacts of X3 and X4. The resulting p-value is 3.7x10ˆ-9.
+This provides an answer to the research question, that PPE and RPDE together have a significant impact on UPDRS score, regardless of subject age or time of data collection.
+
+``` {r Partial Regression}
+# Creating plots of X3 | X1,X2 and X4 | X1,X2
+m1 <- lm(Y~x1+x2+x3)
+rY <- residuals(lm(Y~x1+x2))
+rX3 <- residuals(lm(x3~x1+x2))
+m2 <- lm(rY~rX3)
+summary(m2)
+plot(rX3, rY, main="AV Plot of PPE | Age + Time", xlab="X3 | X1+X2", ylab="Y | X1+X2")
+abline(m2, col="red", lwd=2)
+m3 <- lm(Y~x1+x2+x4)
+rX4 <- residuals(lm(x4~x1+x2))
+m4 <- lm(rY~rX4)
+summary(m4)
+plot(rX4, rY, main="AV Plot of RPDE | Age + Time", xlab="X4 | X1+X2", ylab="Y | X1+X2")
+abline(m4, col="red", lwd=2)
+
+# Performing F-test with full and reduced models
+reduced = lm(rY~1)
+full = lm(rY~rX3+rX4)
+anova(reduced, full)
+```
+Bootstrapping to Find Confidence Intervals on Partial Regression Coefficients: Because the data failed the constant variance and normality assumptions, the above conclusions are dubious. For a more confidence answer, we perform bootstrap analysis on the partial regression coefficients. The resulting 95% confidence
+intervals do not contain zero, so the partial impacts of PPE and RPDE separately are significant, factoring out age and time. This satisfies the “or” condition of our alternative hypothesis. We accept the alternative
+hypothesis that at least one measure of vocal entropy is a significant predictor of UPDRS score, regardless of a subject’s age or at what time within a 6-month window the measurement is taken.
+``` {r bootstrapping}
+data = outliers_gone
+data$y = data$total_UPDRS
+data$Y = y**0.42
+data$x1 = data$test_time
+ageCut = cut(data$age, breaks=c(1,60,65,70,75,100))
+ageCategory = factor(ageCut, levels=c('(1,60]','(60,65]','(65,70]','(70,75]','(75,100]'), labels=c(0,1,2,3,4))
+ageCategory = as.integer(as.character(ageCategory))
+data$x2 = ageCategory
+data$x3 = data$PPE
+data$x4 = data$RPDE
+# Partial regression coefficient for X3 on X1 and X2
+partial_coef1 <- function(data, indices, maxit=20) {
+  data <- data[indices,] # selecting sample with boot
+  rY <- residuals(lm(Y~x1+x2, data=data))
+  rX3 <- residuals(lm(x3~x1+x2, data=data))
+  m2 <- lm(rY~rX3, data)
+  return(coef(m2))
+}
+# Partial regression coefficient for X4 on X1 and X2
+partial_coef2 <- function(data, indices, maxit=20) {
+  data <- data[indices,] # selecting sample with boot
+  rY <- residuals(lm(Y~x1+x2, data=data))
+  rX4 <- residuals(lm(x4~x1+x2, data=data))
+  m4 <- lm(rY~rX4, data)
+  return(coef(m4))
+}
+#Partial regression for X3 - Performing 500 replications with boot
+output1 <- boot(data=data, statistic=partial_coef1, R=500, maxit=20)
+output1
+plot(output1)
+
+bluh1 = boot.ci(output1, type="perc", index=2)
+bluh1
+# Partial regression for X4 - Performing 500 replications with boot
+output2 <- boot(data=data, statistic=partial_coef2, R=500, maxit=20)
+output2
+plot(output2)
+
+bluh2 = boot.ci(output2, type="perc", index=2)
+bluh2
+```
+Back-transformation: For completeness, we backtransform the data in the 95% confidence intervals to estimate the range of likely partial linear impacts of PPE and RPDE.
+``` {r backtransform}
+# Partial regression coefficient, X3
+ci1 = bluh1$percent[4:5]**(1/0.42)
+ci1
+# Partial regression coefficient, X4
+ci2 = bluh2$percent[4:5]**(1/0.42)
+ci2
+```

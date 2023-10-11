@@ -1,0 +1,192 @@
+---
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+## QUESTION 2
+Question 2 tests how the UPDRS score is affected by one’s vocal qualities (Shimmer, PPE and HNR) and sex.
+
+```{r}
+library(dplyr)
+library(car)
+library(fmsb)
+library(ALSM)
+library(onewaytests)
+library(MASS)
+library(readxl)
+library(fmsb)
+library(boot)
+library(leaps)
+library(caret)
+
+```
+
+
+
+```{r}
+data<-read.csv('C:/Users/Ankita Mishra/Desktop/parkinsons_data.csv', header =TRUE, sep=",")
+
+#modify data
+data_group= data
+data_group$test_time= as.integer(data_group$test_time)
+data_group <- data_group %>%
+  group_by('subject#', age, sex, test_time) %>%
+  dplyr::summarise_all("median")%>%
+  as.data.frame()
+
+data= data_group
+
+#define variables
+data$y = data$total_UPDRS
+data$x5 = data$sex
+data$x6= data$Shimmer
+data$x8= data$HNR
+data$x9 = data$NHR
+
+#correlation between the variables
+df= data.frame(data$x5, data$x6, data$x8, data$x9)
+pairs(df)
+cor(df)
+```
+
+The full model includes all the variables and the interaction terms. Running a Shapiro test and Brown-Forsythe test on the data tells us the data is non-normal and doesn't have constant variance as interpreted by the p-value.
+```{r}
+#full model
+
+fullmod = lm(y~x9+x6+x8+as.factor(x5)+as.factor(x5)*x9+as.factor(x5)*x6+as.factor(x5)*x8, data)
+
+res= resid(fullmod)
+shapiro.test(res)
+
+library(onewaytests)
+data$gr = cut(data$y, 5)
+data$residual = fullmod$residuals
+bf.test(residual~gr, data)
+```
+
+Checking for influential points, row 25 seems to be the outlier hence it is removed from the data.
+
+```{r}
+#remove the influential point
+data= data[-c(25), ]
+fullmod = lm(y~x9+x6+x8+as.factor(x5)+as.factor(x5)*x9+as.factor(x5)*x6+as.factor(x5)*x8, data)
+
+res = resid(fullmod)
+shapiro.test(res)
+
+library(onewaytests)
+data$gr = cut(data$y, 5)
+data$residual = fullmod$residuals
+bf.test(residual~gr, data)
+
+```
+
+Since our model is still non-normal and doesn't have constant variance, we transform Y. This gives us a lambda value= 1.060606
+
+```{r}
+#find lambda and transform Y
+library(MASS)
+bcmle= boxcox(fullmod, lambda= seq(-3, 3, by=0.1))
+lambda= bcmle$x[which.max(bcmle$y)]
+lambda
+
+data$newy= (data$y)**lambda
+
+#modified model after transformation
+modY= lm(newy~x9+x6+x8+as.factor(x5)+as.factor(x5)*x9+as.factor(x5)*x6+as.factor(x5)*x8, data)
+
+res= resid(modY)
+shapiro.test(res)
+
+data$gr= cut(data$newy, 5)
+data$residual = modY$residuals
+bf.test(residual~gr, data)
+
+```
+To reduce the non-normality and non-contant variance, we attempted the weighted least squares method
+```{r}
+# weighted least squares method
+wts1=1/fitted(lm(abs(residuals(modY))~x9+x6+x8+as.factor(x5)+as.factor(x5)*x9+as.factor(x5)*x8+as.factor(x5)*x8, data))^2
+mod1=lm(newy~x9+x6+x8+as.factor(x5)+as.factor(x5)*x9+as.factor(x5)*x6+as.factor(x5)*x8, weight=wts1, data=data)
+
+res = resid(mod1)
+shapiro.test(res)
+library(onewaytests)
+data$gr = cut(data$newy, 5)
+data$residual = mod1$residuals
+bf.test(residual~gr, data)
+
+plot(fitted(mod1), residuals(mod1))
+
+wts2=1/fitted(lm(abs(residuals(mod1))~x9+x6+x8+as.factor(x5)+as.factor(x5)*x9+as.factor(x5)*x8+as.factor(x5)*x8, data))^2
+mod2=lm(newy~x9+x6+x8+as.factor(x5)+as.factor(x5)*x9+as.factor(x5)*x6+as.factor(x5)*x8, weight=wts2, data=data)
+
+res = resid(mod2)
+shapiro.test(res)
+data$gr = cut(data$newy, 5)
+data$residual = mod2$residuals
+bf.test(residual~gr, data)
+
+plot(fitted(mod2), residuals(mod2))
+
+wts3=1/fitted(lm(abs(residuals(mod2))~x9+x6+x8+as.factor(x5)+as.factor(x5)*x9+as.factor(x5)*x8+as.factor(x5)*x8, data))^2
+mod3=lm(newy~x9+x6+x8+as.factor(x5)+as.factor(x5)*x9+as.factor(x5)*x6+as.factor(x5)*x8, weight=wts2, data=data)
+
+res = resid(mod3)
+shapiro.test(res)
+data$gr = cut(data$newy, 5)
+data$residual = mod3$residuals
+bf.test(residual~gr, data)
+
+plot(fitted(mod3), residuals(mod3))
+```
+The WLS made the model worse, thus we continue with the transformed Y model.
+
+
+```{r}
+plot(fitted(modY), residuals(modY))
+abline(0,0)
+res= resid(modY)
+qqnorm(res)
+qqline(res)
+```
+
+
+```{r}
+#bootstrapping
+library(boot)
+
+boot.reg <- function(data, indices, maxit=1000) {
+  data <- data[indices,]
+  data.mod<-lm(newy~x9+x6+x8+as.factor(x5)+as.factor(x5)*x9+as.factor(x5)*x6+as.factor(x5)*x8, data=data)
+
+  coef(data.mod)
+}
+
+data_model_reg <- boot(data=data, statistic = boot.reg, R=1000, maxit=100)
+data_model_reg
+summary(modY)
+```
+
+```{r}
+#cross-validation
+library(MASS)
+library(leaps)
+library(caret)
+
+set.seed(123)
+
+train.control=trainControl(method="cv", number=10)
+step.model=train(newy~x9+x6+x8+as.factor(x5)+as.factor(x5)*x9+as.factor(x5)*x6+as.factor(x5)*x8, data, method="leapBackward", tuneGrid=data.frame(nvmax=5), trControl=train.control)
+step.model$results
+summary(modY)
+```
+```{r}
+fullmod= lm(newy~x9+x6+x8+as.factor(x5)+as.factor(x5)*x9+as.factor(x5)*x6+as.factor(x5)*x8, data)
+redmod= lm(newy~as.factor(x5), data)
+anova(redmod, fullmod)
+
+qf(0.95, 6, 945)
+```
+Since Fs= 16.404 > F(0.95, 6, 945) = 2.108158, we reject H0 and hence vocal qualities like Shimmer, HNR, NHR and their interaction terms with sex have a significant impact on UPDRS score
