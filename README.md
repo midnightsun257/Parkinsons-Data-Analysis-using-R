@@ -52,3 +52,15 @@ Question 3 assesses whether the age groups defined as (36, 45.8], (45.8, 55.6], 
 $H_0: \beta_{21} = \beta_{22} = \beta_{23} = \beta_{24} = \beta_{921} = \beta_{1021} = \beta_{821} = \beta_{922} = \beta_{1022} = \beta_{822} = \beta_{923} = \beta_{1023} = \beta_{823} = \beta_{924} = \beta_{1024} = \beta_{824} = 0$
 
 $H_a:$ At least one of $\beta_{21}, \beta_{22}, \beta_{23}, \beta_{24}, \beta_{921}, \beta_{1021}, \beta_{821}, \beta_{922}, \beta_{1022}, \beta_{822}, \beta_{923}, \beta_{1023}, \beta_{823}, \beta_{924}, \beta_{1024}, \beta_{824} \not= 0$
+
+# Final Model
+The model that can best predict the UPDRS score is using all the variables used in this study.
+
+$Y= \beta_1 X_1 + \beta_3 X_3 + \beta_4 X_4 + \beta_6 X_6 + \beta_7 X_7 + \beta_8 X_8 + \beta_9 X_9 + \beta_{10} X_{10}$
+
+Diagnostic measures like boxcox transformation and weighted least squares were taken to fix non-normality and non-constant variance issues.
+
+# Limitations of the study:
+- 42 people participated in the study. Even though there was more than 5000 rows of data available, since they are all coming from only 42 subjects, many data points will potentially be repeated, since data was collected from each participant multiple times in a day.
+- Some models didn't achieve normality and constant variance, so there is room for improvement in finding better models to answer these questions.
+  
